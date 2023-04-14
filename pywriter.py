@@ -18,6 +18,7 @@
 import argparse
 import zmq
 import sys 
+import signal 
 
 def get_args(parser):
     """
@@ -68,7 +69,16 @@ def create_zmq_sub(zmq_pub, filter):
 def zmq_sub_destroy(sub):
     sub.close()        # Close the subscriber
     sub.context.term() # Terminate context 
-    
+
+def signal_handler(signum, frame):
+    """
+    Handles signals thrown by system 
+    """
+    print("Signal: %s :::: Frame: %s\n" % (signum, frame))
+
+def exit_handler(signum, frame):
+    print("Exiting...")
+    exit(0)
 
 def main():
     g_outstream = sys.stdout.buffer # Initialize output stream to stdout
