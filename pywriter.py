@@ -55,13 +55,20 @@ def create_zmq_sub(zmq_pub, filter):
         socket.connect(zmq_pub) # Connect to the publisher
     except zmq.ZMQError as exc:
         print("Error in create_zmq_sub: %s\n" % exc)
-        handle_error(socket) # Handle error on socket
+        handle_error(socket)
         socket.context.term()
-        return -1;           # System error, unable to connect to publisher
+        return -1;             # Unable to connect to publisher
     
-    socket.subscribe(filter) # Subscribe to all topics
+    socket.setsockopt_string(zmq.SUBSCRIBE, filter) # Set topic filter
+
+    # as_zmq_sub_attach -> Attaches the zmq sub to a thread - Do once working
 
     return socket
+
+def zmq_sub_destroy(sub):
+    sub.close()        # Close the subscriber
+    sub.context.term() # Terminate context 
+    
 
 def main():
     g_outstream = sys.stdout.buffer # Initialize output stream to stdout
@@ -79,15 +86,17 @@ def main():
     # Initialize ZMQ SUB
     print("Connecting to %s...\n" % args.ZMQ) # DEBUG
     socket = create_zmq_sub(args.ZMQ, filter)
-
+    
     if socket != -1:
-        message = socket.recv()
-        print("Received reply [ %s ]" % message)
+    # Temp til threads implemented: while loop to catch information coming in and print to stdout. Kill it after
+        while(1): 
+            message = socket.recv()
+            print("Received reply [ %s ]" % message)
     
     # Wait for the slow release of death
-
+    
     # Shutdown the ZMQ SUB bus
-
+    
     # Close the PCAP file if opened
     if not g_outstream.closed:
         print("Closing stream\n")
