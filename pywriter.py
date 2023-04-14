@@ -13,41 +13,19 @@
 #	along with this program; if not, write to the Free Software
 #	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
-#
-#   Hello World client in Python
-#   Connects REQ socket to tcp://localhost:5555
-#   Sends "Hello" to server, expects "World" back
-#
-
-import os
-import time
+#import os
+#import time
 import argparse
 import zmq
 import sys 
-
-#context = zmq.Context()
-
-#  Socket to talk to server
-#print("Connecting to hello world server…")
-#socket = context.socket(zmq.REQ)
-#socket.connect("tcp://localhost:5555")
-
-#  Do 10 requests, waiting each time for a response
-#for request in range(10):
-#    print("Sending request %s …" % request)
-#    socket.send(b"Hello")
-
-    #  Get the reply.
-#    message = socket.recv()
-#    print("Received reply %s [ %s ]" % (request, message))
 
 def get_args(parser):
     """
     Retrieves and parse arguments from the command line.
     """
     parser.add_argument('--help', '-h', action='help', help='Displays this information')
-    parser.add_argument('--ZMQ', '-Z',  action='store', metavar='<args>', required=True, type=str, help='Set the ZMQ bus to listen on') 
-    parser.add_argument('--PCAP', '-P',  action='store', metavar='', type=str, help='Write data to a pcap file')
+    parser.add_argument('--ZMQ', '-Z', action='store', metavar='<args>', required=True, type=str, help='Set the ZMQ bus to listen on') 
+    parser.add_argument('--PCAP', '-P', action='store', metavar='', type=str, help='Write data to a pcap file')
     parser.add_argument('--stats', action='store_true', default=False, help='Display stats on stderr')
     parser.add_argument('--us', action='store_true', default=False, help='Force Microsecond Timestamps')
     parser.add_argument('--ns',	action='store_true', default=False, help='Force Nanosecond Timestamps')
@@ -55,24 +33,39 @@ def get_args(parser):
     parser.add_argument('--maxpkts', action='store', metavar='<args>', type=int, help='Stop after X pkts')
     parser.add_argument('--maxsize', action='store', metavar='<args>', type=int, help='Stop after X MB')
 
-    args = parser.parse_args()
-    print(args)
-    return args
+    return parser.parse_args()
 
-def create_zmq_sub(zmq_pub):
+def handle_error(sub):
+    """
+    Handle ZMQ SUB related errors
+    """
+    sub.close()        # Close the subscriber
+    sub.context.term() # Terminate context 
+	
+def create_zmq_sub(zmq_pub, filter):
     """
     Creates ZMQ subscriber given an address and port to a zmq publisher
-    e.g. tcp://localhost:9999
+    e.g. protocol://interface:port
     """
     context = zmq.Context()          # Initialize zmq context object
-    socket = context.socket(zmq.SUB) # Connect and subscribe the socket to the publisher
-    socket.connect(zmq_pub)
-    socket.subscribe("")
+    socket = context.socket(zmq.SUB) # Assign context socket
+    socket.setsockopt(zmq.RCVHWM, 0) # Set maximum amount of outstanding messages to 0
+    
+    try: 
+        socket.connect(zmq_pub) # Connect to the publisher
+    except zmq.ZMQError as exc:
+        print("Error in create_zmq_sub: %s\n" % exc)
+        handle_error(socket) # Handle error on socket
+        socket.context.term()
+        return -1;           # System error, unable to connect to publisher
+    
+    socket.subscribe(filter) # Subscribe to all topics
 
     return socket
 
 def main():
     g_outstream = sys.stdout.buffer # Initialize output stream to stdout
+    filter = "" # Blank string means we subscribe to all topics
 
     parser = argparse.ArgumentParser(description="Use pkt_writer.exe to save packets to a pcap file or \
         to print packets into wireshark/tshark/tcpdump.", add_help=False) # Initialize argument parser object
@@ -84,11 +77,12 @@ def main():
         g_outstream = open(args.PCAP, "wb") # Write to pcap as binary file
     
     # Initialize ZMQ SUB
-    print("Connecting to ZMQ BUS\n")
-    socket = create_zmq_sub(args.ZMQ)
+    print("Connecting to %s...\n" % args.ZMQ) # DEBUG
+    socket = create_zmq_sub(args.ZMQ, filter)
 
-    message = socket.recv()
-    print("Received reply [ %s ]" % message)
+    if socket != -1:
+        message = socket.recv()
+        print("Received reply [ %s ]" % message)
     
     # Wait for the slow release of death
 
