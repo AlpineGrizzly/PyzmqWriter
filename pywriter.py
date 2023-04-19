@@ -18,7 +18,8 @@ import time
 import argparse
 import zmq
 import sys 
-import signal 
+import signal
+import struct 
 
 def get_args(parser):
     """
@@ -96,41 +97,40 @@ def write_header(fh, outstream, ts_mode) -> bool:
     tokens = fh.decode("utf-8").split('/') # Decode header binary + tokenize
     
     if len(tokens) != 5:
-        print("Error:: Insufficient header data\n")
+        print("Error:: Insufficient header data\n") #DEBUG
         return False
 
-    g_magic = int(tokens[0], 10)                 # Timing precision
+    # Get our timestamp precision
+    match ts_mode:
+        case 0: # Default given by header
+            g_magic = int(tokens[0], 10)
+        case 1: # Microseconds
+            g_magic = 0xA1B2C3D4 
+        case 2: # Nanoseconds
+            g_magic = 0xA1B23C4D    
+
     linktype = int(tokens[1], 10)                # Link type of connection
     thiszone = int(tokens[2], 10)                # Not sure what this is
     sigfigs = int(tokens[3], 10)                 # Need a better verbose name
     snaplen = int(tokens[4].rstrip('\x00'), 10)  # Snapshot length of capture
-
-    if 0xA1B2C3D4 == g_magic:
-        print("%s -> us\n" % "0xA1B2C3D4")
-
-    if 0xA1B23C4D == g_magic:
-        print("%s -> ns\n" % "0xA1B23C4D")
-
+    
     # Version Numbers
     vers_major = 1
     vers_minor = 0
-
-    # Process header
+    
     # Write header to outstream
-    #outstream.write(bytes(g_magic))
-    print("Magic: %lu\nLinktype: %lu\nThiszone: %lu\nSigfigs: %lu\nSnaplen: %lu\n" 
-            % (g_magic, linktype, thiszone, sigfigs, snaplen))
-
-    return True
-        
-    # magic_number_for_time/linktype/thiszone/sigfigs/snaplen
-    # Override the default and convert timestamps
-	# if(g_us_ts) { g_magic = 0xA1B2C3D4; }
-	# if(g_ns_ts) { g_magic = 0xA1B23C4D; }
+    byte_format = '<LHHLLLL' # Little-endian format of bytes to be written
+    bytes_w = outstream.write(struct.pack(byte_format, g_magic, vers_major, vers_minor, thiszone, sigfigs, snaplen, linktype))
+    
+    # Check to see if all bytes have been written to the outstream
+    if(bytes_w == struct.calcsize(byte_format)):
+        return True # Success
+    return False
 
 def write_packet(ts_msg, pkt_msg, outstream) -> None:
     """ 
     write_packet: Print packet data to a given outstream
+
     :ts_msg: Timestamp info for packet
     :pkt_msg: Packet content 
     :outstream: stdout, pcap, or other file to have data written out to
@@ -150,7 +150,7 @@ def unpack_zmq(socket, outstream, ts_mode) -> int:
     global g_header_written
     err = 0
     
-    # Receive a packet information from ZMQ to unpack
+    # Receive a packet of information from ZMQ to unpack
     dev_msg = socket.recv() # Device source
     fh_msg = socket.recv()  # File Header 
     ts_msg = socket.recv()  # Time stamp
@@ -192,9 +192,8 @@ def main():
     if socket != -1:
     # Temp til threads implemented: while loop to catch information coming in and print to stdout. Kill it after
         err = 0
-        while(err == 0): 
-            err = unpack_zmq(socket, outstream, ts_mode) # Receive and unpack zmq messages as they come in 
-            err = 1
+        #while(err == 0): 
+        err = unpack_zmq(socket, outstream, ts_mode) # Receive and unpack zmq messages as they come in 
     
     # Wait for the slow release of death
     
