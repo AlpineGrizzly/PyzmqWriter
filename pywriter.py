@@ -119,7 +119,7 @@ def write_header(fh, outstream, ts_mode) -> bool:
     vers_minor = 4
     
     # Write header to outstream
-    byte_format = '<LHHLLLL' # Little-endian format of bytes to be written
+    byte_format = 'I2H4I' # Little-endian format of bytes to be written
     bytes_w = outstream.write(struct.pack(byte_format, g_magic, vers_major, vers_minor, thiszone, sigfigs, snaplen, linktype))
     
     # Check to see if all bytes have been written to the outstream
@@ -156,7 +156,7 @@ def write_packet(ts_msg, ts_mode, pkt_msg, outstream) -> bool:
         frac /= 1000
 
     # Write the packet
-    byte_format = '=LLLL' # Little-endian format of bytes to be written
+    byte_format = '4I' # Little-endian format of bytes to be written
     bytes_w = outstream.write(struct.pack(byte_format, sec, int(frac), cap_len, pkt_len)) # Write packet header 
     
     # Check to see if all packet header have been written to the outstream
@@ -164,7 +164,7 @@ def write_packet(ts_msg, ts_mode, pkt_msg, outstream) -> bool:
         return False
     
     # Write the packet payload
-    byte_format = '<%ss'% pkt_len # Little-endian format of bytes to be written
+    byte_format = '%ss'% pkt_len # Little-endian format of bytes to be written
     bytes_w = outstream.write(struct.pack(byte_format, pkt_msg)) # Write packet header 
     
     # Check to see if all packet payload have been written to the outstream
