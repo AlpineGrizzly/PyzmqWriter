@@ -115,8 +115,8 @@ def write_header(fh, outstream, ts_mode) -> bool:
     snaplen = int(tokens[4].rstrip('\x00'), 10)  # Snapshot length of capture
     
     # Version Numbers
-    vers_major = 1
-    vers_minor = 0
+    vers_major = 2
+    vers_minor = 4
     
     # Write header to outstream
     byte_format = '<LHHLLLL' # Little-endian format of bytes to be written
@@ -127,15 +127,51 @@ def write_header(fh, outstream, ts_mode) -> bool:
         return True # Success
     return False
 
-def write_packet(ts_msg, pkt_msg, outstream) -> None:
+def write_packet(ts_msg, ts_mode, pkt_msg, outstream) -> bool:
     """ 
     write_packet: Print packet data to a given outstream
 
     :ts_msg: Timestamp info for packet
+    :ts_mode: Timestamp precision
     :pkt_msg: Packet content 
     :outstream: stdout, pcap, or other file to have data written out to
+
+    return: Returns True if able to write packet, False otherwise
     """
-    print("Time: %s\nContent: %s\nTo outstream %s\n" % (ts_msg, pkt_msg, outstream)) #DEBUG
+    global g_magic
+    
+    ts_data = ts_msg.decode("utf-8").split('.')
+
+    if(len(ts_data) != 2):
+        return False
+    
+    # Store our timestamp data
+    sec = int(ts_data[0].rstrip('\x00'), 10)  
+    frac = int(ts_data[1].rstrip('\x00'), 10)
+
+    cap_len = pkt_len = len(pkt_msg) # Get our capture/packet length in bytes
+
+    # Check for Microsecond precision
+    if(g_magic == 0xA1B2C3D4): 
+        frac /= 1000
+
+    # Write the packet
+    byte_format = '=LLLL' # Little-endian format of bytes to be written
+    bytes_w = outstream.write(struct.pack(byte_format, sec, int(frac), cap_len, pkt_len)) # Write packet header 
+    
+    # Check to see if all packet header have been written to the outstream
+    if(bytes_w != struct.calcsize(byte_format)):
+        return False
+    
+    # Write the packet payload
+    byte_format = '<%ss'% pkt_len # Little-endian format of bytes to be written
+    bytes_w = outstream.write(struct.pack(byte_format, pkt_msg)) # Write packet header 
+    
+    # Check to see if all packet payload have been written to the outstream
+    if(bytes_w == struct.calcsize(byte_format)):
+        return True # Success
+    
+    return False
 
 def unpack_zmq(socket, outstream, ts_mode) -> int:
     """ 
@@ -160,8 +196,8 @@ def unpack_zmq(socket, outstream, ts_mode) -> int:
         g_header_written = write_header(fh_msg, outstream, ts_mode)
 
     if(g_header_written and ts_msg and pkt_msg):
-        err = write_packet(ts_msg, pkt_msg, outstream)
-        if err:
+        err = write_packet(ts_msg, ts_mode, pkt_msg, outstream)
+        if not err:
             print("Error:: Unable to write packet data: Status Code -> %s\n" % err)
             return -1
         else:
@@ -172,6 +208,7 @@ def unpack_zmq(socket, outstream, ts_mode) -> int:
 
 def main():
     global g_header_written       # Initialize Global header written boolean
+    global g_magic
     g_header_written = False      # Have we written the file header to the packet
     ts_mode = 0                   # Timestamp Mode, 0 by default, 1 for Microsecond, 2 for Nanosecond
     filter = ""                   # Blank string means we subscribe to all topics
@@ -192,8 +229,8 @@ def main():
     if socket != -1:
     # Temp til threads implemented: while loop to catch information coming in and print to stdout. Kill it after
         err = 0
-        #while(err == 0): 
-        err = unpack_zmq(socket, outstream, ts_mode) # Receive and unpack zmq messages as they come in 
+        while(err == 0): 
+            err = unpack_zmq(socket, outstream, ts_mode) # Receive and unpack zmq messages as they come in 
     
     # Wait for the slow release of death
     
