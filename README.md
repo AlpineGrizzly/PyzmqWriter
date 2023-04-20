@@ -1,7 +1,5 @@
 # PyzmqWriter
-Python implementation of the pkt_writer from 
-Client subscriber to ZeroMQ PUB BUS using Pyzmq python module 
-Derivative work of https://github.com/Fullaxx/pktstreamer
+Python Implementation pktwriter that can be found at https://github.com/Fullaxx/pktstreamer
 
 ## Requirements for building
 First we need to make sure we have all the appropriate libraries. \
