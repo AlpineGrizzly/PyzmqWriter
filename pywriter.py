@@ -1,20 +1,17 @@
-# 	Copyright (C) 2023 Dalton Kinney <daltonckinney@gmail.com>
+#	Copyright (C) 2023 Brett Kuskie <fullaxx@gmail.com>
 #
-# 	This program is free software; you can redistribute it and/or modify
+#	This program is free software; you can redistribute it and/or modify
 #	it under the terms of the GNU General Public License as published by
 #	the Free Software Foundation; version 2 of the License.
 #
 #	This program is distributed in the hope that it will be useful,
 #	but WITHOUT ANY WARRANTY; without even the implied warranty of
-#	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #	GNU General Public License for more details.
 #
 #	You should have received a copy of the GNU General Public License
 #	along with this program; if not, write to the Free Software
 #	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
-#import os
-import time
 import argparse
 import zmq
 import sys 
@@ -75,17 +72,25 @@ def signal_handler(signum, frame):
     """
     Handles signals thrown by system 
     :signum: Signal ID
-    :frame: ...idk
+    :frame: Frame of execution interrupted
     """
-    print("Signal: %s :::: Frame: %s\n" % (signum, frame))
+    global g_shutdown
 
-def exit_handler(signum, frame):
-    print("Exiting...")
-    exit(0)
+    # If we catch one of these signals, begin shutdown of program
+    match signum:
+        case signal.SIGHUP:
+            g_shutdown = 1
+        case signal.SIGINT:
+            g_shutdown = 1
+        case signal.SIGTERM:
+            g_shutdown = 1
+        case signal.SIGQUIT:
+            g_shutdown = 1
 
 def write_header(fh, outstream, ts_mode) -> bool:
     """ 
-    write_header: write the file header from the ZMQ PUB to a designated stream 
+    write_header: write the file header from the ZMQ PUB to a designated 
+                  stream 
 
     :fh: File header information
     :outstream: Outstream for header to be printed to
@@ -169,9 +174,21 @@ def write_packet(ts_msg, ts_mode, pkt_msg, outstream) -> bool:
     
     # Check to see if all packet payload have been written to the outstream
     if(bytes_w == struct.calcsize(byte_format)):
+        count_packet(bytes_w) # Count the processed packet
         return True # Success
     
     return False
+
+def count_packet(pkt_bytes) -> None:
+    """
+    count_packet: Add a processed packet and its size in bytes to a running
+                  total
+    
+    :pkt_bytes: Size in bytes of processed packet
+    """
+    global g_num_pkts, g_num_bytes
+    g_num_pkts += 1
+    g_num_bytes += pkt_bytes
 
 def unpack_zmq(socket, outstream, ts_mode) -> int:
     """ 
@@ -196,21 +213,24 @@ def unpack_zmq(socket, outstream, ts_mode) -> int:
         g_header_written = write_header(fh_msg, outstream, ts_mode)
 
     if(g_header_written and ts_msg and pkt_msg):
-        err = write_packet(ts_msg, ts_mode, pkt_msg, outstream)
-        if not err:
+        rslt = write_packet(ts_msg, ts_mode, pkt_msg, outstream)
+        if not rslt:
             print("Error:: Unable to write packet data: Status Code -> %s\n" % err)
             return -1
-        else:
-            return 0
     else:
         print("Error:: Incomplete message/No data received\n")
         return -1
+    
+    return 0 # Success
+    
+    
 
 def main():
-    global g_header_written       # Initialize Global header written boolean
-    global g_magic
+    global g_header_written, g_magic, g_num_pkts, g_num_bytes, g_shutdown
     g_header_written = False      # Have we written the file header to the packet
-    ts_mode = 0                   # Timestamp Mode, 0 by default, 1 for Microsecond, 2 for Nanosecond
+    g_shutdown = 0
+    g_num_pkts = 0
+    g_num_bytes = 0
     filter = ""                   # Blank string means we subscribe to all topics
     outstream = sys.stdout.buffer # Initialize output stream to stdout
 
@@ -218,28 +238,38 @@ def main():
         to print packets into wireshark/tshark/tcpdump.", add_help=False) # Initialize argument parser object
 
     args = get_args(parser) # Retrieve and parse arguments from the cl
-
+    print(args)
     # If a PCAP file is provided for output stream, use it instead
     if args.PCAP is not None:
         outstream = open(args.PCAP, "wb") # Write to pcap as binary file
 
-    # Initialize ZMQ SUB
-    socket = create_zmq_sub(args.ZMQ, filter)
+    # Evaluate timestamp precision argument
+    if args.us is not None:
+        ts_mode = 1 # Use microseconds
+    elif args.ns is not None:
+        ts_mode = 2 # Use nanoseconds
+    else:
+        ts_mode = 0 # Use default
 
+    socket = create_zmq_sub(args.ZMQ, filter) # Initialize ZMQ SUB
+
+    # Initialize our signals that we would like to handle
+    signal.signal(signal.SIGHUP,  signal_handler)
+    signal.signal(signal.SIGINT,  signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGQUIT, signal_handler)
+
+    # Begin packet writing loop with a valid socket
     if socket != -1:
-    # Temp til threads implemented: while loop to catch information coming in and print to stdout. Kill it after
         err = 0
-        while(err == 0): 
+        while(err == 0 and not g_shutdown): 
             err = unpack_zmq(socket, outstream, ts_mode) # Receive and unpack zmq messages as they come in 
-    
-    # Wait for the slow release of death
     
     # Shutdown the ZMQ SUB bus
     zmq_sub_destroy(socket)
 
     # Close the PCAP file if opened
     if not outstream.closed:
-        print("Closing stream\n")
         outstream.close()
 
 if __name__ == "__main__":
