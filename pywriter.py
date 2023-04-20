@@ -17,6 +17,7 @@ import zmq
 import sys 
 import signal
 import struct 
+from datetime import datetime
 
 def get_args(parser):
     """
@@ -190,6 +191,25 @@ def count_packet(pkt_bytes) -> None:
     g_num_pkts += 1
     g_num_bytes += pkt_bytes
 
+def check_for_stop_condition(arg_time: int, arg_pkts: int, arg_bytes: int) -> bool:
+    """
+    check_for_stop_condition: Checks if any of our stop conditions are true and need to be handled
+    
+    :arg_time: Time in seconds that program should cease operation
+    :arg_pkts: Number of packets to be processed before ceasing
+    :arg_bytes: Number of bytes to process before ceasing
+
+    return: Returns True if we should stop, False otherwise
+    """
+    global g_shutdown
+    # Check for time
+    
+    if(arg_pkts is not None and g_num_pkts >= arg_pkts):   # Check for number of packets
+        g_shutdown = 1
+    
+    if(arg_bytes is not None and (g_num_bytes / 10**6) >= arg_bytes): # Check for number of bytes
+        g_shutdown = 1
+    
 def unpack_zmq(socket, outstream, ts_mode) -> int:
     """ 
     unpack_zmq: Unpack ZMQ PUB data 
@@ -262,8 +282,9 @@ def main():
     # Begin packet writing loop with a valid socket
     if socket != -1:
         err = 0
-        while(err == 0 and not g_shutdown): 
+        while(err == 0 and not g_shutdown):
             err = unpack_zmq(socket, outstream, ts_mode) # Receive and unpack zmq messages as they come in 
+            check_for_stop_condition(args.maxtime, args.maxpkts, args.maxsize)
     
     # Shutdown the ZMQ SUB bus
     zmq_sub_destroy(socket)
