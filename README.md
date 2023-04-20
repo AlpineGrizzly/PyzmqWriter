@@ -1,5 +1,5 @@
 # PyzmqWriter
-Python Implementation pktwriter that can be found at https://github.com/Fullaxx/pktstreamer
+Python Implementation of C pktwriter that can be found at https://github.com/Fullaxx/pktstreamer
 
 ## Requirements for building
 First we need to make sure we have all the appropriate libraries. \
