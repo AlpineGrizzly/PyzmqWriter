@@ -1,4 +1,4 @@
-#	Copyright (C) 2023 Brett Kuskie <fullaxx@gmail.com>
+#	Copyright (C) 2023 Dalton Kinney <daltonckinney@gmail.com>
 #
 #	This program is free software; you can redistribute it and/or modify
 #	it under the terms of the GNU General Public License as published by
@@ -19,6 +19,30 @@ import signal
 import struct 
 from datetime import datetime
 
+class pcap_hdr_t():
+    """ Class struct to represent a pcap header """
+    def __init__(self, magic, vers_major, vers_minor, timezone, sigfigs, snaplen, linktype):
+        self.format = 'I2H4I'        # Little-endian format of bytes to be written
+        self.magic = magic           # Time precision of pcap 
+        self.vers_major = vers_major # Pcap Version Major
+        self.vers_minor = vers_minor # "          " Minor
+        self.timezone = timezone     # Timezone
+        self.sigfigs = sigfigs       # Timestamp accuracy
+        self.snaplen = snaplen       # Snapshot length of capture
+        self.linktype = linktype     # Network link
+
+    def write_pcap(self, outstream) -> int:
+        """ Write the pcap to an outstream """
+        bytes_w = outstream.write(struct.pack(self.format, 
+                                              self.magic, 
+                                              self.vers_major, 
+                                              self.vers_minor, 
+                                              self.timezone, 
+                                              self.sigfigs, 
+                                              self.snaplen, 
+                                              self.linktype))
+        return bytes_w
+    
 def get_args(parser):
     """
     Retrieves and parse arguments from the command line.
@@ -115,30 +139,28 @@ def write_header(fh, outstream, ts_mode) -> bool:
         case 2: # Nanoseconds
             g_magic = 0xA1B23C4D    
 
+    # Parse tokens
     linktype = int(tokens[1], 10)                # Link type of connection
-    thiszone = int(tokens[2], 10)                # Not sure what this is
-    sigfigs = int(tokens[3], 10)                 # Need a better verbose name
+    timezone = int(tokens[2], 10)                # Timezone 
+    sigfigs = int(tokens[3], 10)                 # Timestamp accuracy
     snaplen = int(tokens[4].rstrip('\x00'), 10)  # Snapshot length of capture
     
-    # Version Numbers
-    vers_major = 2
-    vers_minor = 4
-    
+    # Initialize our Pcap header
+    pcap_header = pcap_hdr_t(g_magic, 2, 4, timezone, sigfigs, snaplen, linktype)
+
     # Write header to outstream
-    byte_format = 'I2H4I' # Little-endian format of bytes to be written
-    bytes_w = outstream.write(struct.pack(byte_format, g_magic, vers_major, vers_minor, thiszone, sigfigs, snaplen, linktype))
-    
+    bytes_w = pcap_header.write_pcap(outstream)
+
     # Check to see if all bytes have been written to the outstream
-    if(bytes_w == struct.calcsize(byte_format)):
+    if(bytes_w == struct.calcsize(pcap_header.format)):
         return True # Success
     return False
 
-def write_packet(ts_msg, ts_mode, pkt_msg, outstream) -> bool:
+def write_packet(ts_msg, pkt_msg, outstream) -> bool:
     """ 
     write_packet: Print packet data to a given outstream
 
     :ts_msg: Timestamp info for packet
-    :ts_mode: Timestamp precision
     :pkt_msg: Packet content 
     :outstream: stdout, pcap, or other file to have data written out to
 
@@ -182,8 +204,7 @@ def write_packet(ts_msg, ts_mode, pkt_msg, outstream) -> bool:
 
 def count_packet(pkt_bytes) -> None:
     """
-    count_packet: Add a processed packet and its size in bytes to a running
-                  total
+    count_packet: Add a processed packet and its size in bytes to a running total
     
     :pkt_bytes: Size in bytes of processed packet
     """
@@ -191,23 +212,24 @@ def count_packet(pkt_bytes) -> None:
     g_num_pkts += 1
     g_num_bytes += pkt_bytes
 
-def check_for_stop_condition(arg_time: int, arg_pkts: int, arg_bytes: int) -> bool:
+def check_for_stop_condition(arg_time: int, arg_pkts: int, arg_mb: int) -> bool:
     """
     check_for_stop_condition: Checks if any of our stop conditions are true and need to be handled
     
     :arg_time: Time in seconds that program should cease operation
     :arg_pkts: Number of packets to be processed before ceasing
-    :arg_bytes: Number of bytes to process before ceasing
+    :arg_mb: Number of mb to process before ceasing
 
     return: Returns True if we should stop, False otherwise
     """
     global g_shutdown
     # Check for time
     
+    #if (arg_time is not None and arg_time >= datetime. )
     if(arg_pkts is not None and g_num_pkts >= arg_pkts):   # Check for number of packets
         g_shutdown = 1
     
-    if(arg_bytes is not None and (g_num_bytes / 10**6) >= arg_bytes): # Check for number of bytes
+    if(arg_mb is not None and (g_num_bytes >= arg_mb * 10**6)): # Check for number of bytes
         g_shutdown = 1
     
 def unpack_zmq(socket, outstream, ts_mode) -> int:
@@ -233,7 +255,7 @@ def unpack_zmq(socket, outstream, ts_mode) -> int:
         g_header_written = write_header(fh_msg, outstream, ts_mode)
 
     if(g_header_written and ts_msg and pkt_msg):
-        rslt = write_packet(ts_msg, ts_mode, pkt_msg, outstream)
+        rslt = write_packet(ts_msg, pkt_msg, outstream)
         if not rslt:
             print("Error:: Unable to write packet data: Status Code -> %s\n" % err)
             return -1
@@ -242,8 +264,6 @@ def unpack_zmq(socket, outstream, ts_mode) -> int:
         return -1
     
     return 0 # Success
-    
-    
 
 def main():
     global g_header_written, g_magic, g_num_pkts, g_num_bytes, g_shutdown
