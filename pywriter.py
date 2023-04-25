@@ -17,7 +17,7 @@ import zmq
 import sys 
 import signal
 import struct 
-from datetime import datetime
+import time
 
 class pcap_hdr_t():
     """ Class struct to represent a pcap header """
@@ -104,13 +104,45 @@ def signal_handler(signum, frame):
     # If we catch one of these signals, begin shutdown of program
     match signum:
         case signal.SIGHUP:
-            g_shutdown = 1
+            set_shutdown("SIGHUP")
         case signal.SIGINT:
-            g_shutdown = 1
+            set_shutdown("SIGINT")
         case signal.SIGTERM:
-            g_shutdown = 1
+            set_shutdown("SIGTERM")
         case signal.SIGQUIT:
-            g_shutdown = 1
+            set_shutdown("SIGQUIT")
+
+def alarm_handler(signum, frame):
+    """ 
+    alarm handler Enabled when g_stats is defined, prints bytes/second of packet data written
+    """
+    global g_bw_count
+    bw_units = ""    # Byte write units
+    bw = g_bw_count
+    g_bw_count = 0   # Reinitialize bw counter
+
+    # The tower of bs
+    if bw >= 10**12:  # TB/s
+        bw_units = "TB/s"
+        bw = bw / 10**12
+    elif bw >= 10**9: # GB/s
+        bw_units = "GB/s"
+        bw = bw / 10**9        
+    elif bw >= 10**6: # MB/s
+        bw_units = "MB/s"
+        bw = bw / 10**6
+    elif bw >= 10**3: # KB/s
+        bw_units = "KB/s"
+        bw = bw / 10**3
+    else:             # B/s
+        bw_units = "B/s"
+        bw = bw
+
+    sys.stderr.write("%lu %s\n" % (bw, bw_units))
+    sys.stderr.flush()
+
+    signal.alarm(1)
+
 
 def write_header(fh, outstream, ts_mode) -> bool:
     """ 
@@ -208,11 +240,23 @@ def count_packet(pkt_bytes) -> None:
     
     :pkt_bytes: Size in bytes of processed packet
     """
-    global g_num_pkts, g_num_bytes
+    global g_num_pkts, g_num_bytes, g_bw_count
     g_num_pkts += 1
-    g_num_bytes += pkt_bytes
+    g_num_bytes += pkt_bytes + 16 # Add the packet header
+    g_bw_count += pkt_bytes
 
-def check_for_stop_condition(arg_time: int, arg_pkts: int, arg_mb: int) -> bool:
+def set_shutdown(debug: str):
+    """ 
+    set_shutdown Set the global shutdown var 
+    :debug: String containing debug info related to shutdown
+    """
+    global g_shutdown, g_enable_debug
+    g_shutdown = 1
+
+    if(g_enable_debug):
+        sys.stderr.write("DEBUG -- Shutdown: %s --\n" % debug)
+
+def check_for_stop_condition(stop_time: int, arg_pkts: int, arg_mb: int) -> bool:
     """
     check_for_stop_condition: Checks if any of our stop conditions are true and need to be handled
     
@@ -223,14 +267,15 @@ def check_for_stop_condition(arg_time: int, arg_pkts: int, arg_mb: int) -> bool:
     return: Returns True if we should stop, False otherwise
     """
     global g_shutdown
-    # Check for time
     
-    #if (arg_time is not None and arg_time >= datetime. )
-    if(arg_pkts is not None and g_num_pkts >= arg_pkts):   # Check for number of packets
-        g_shutdown = 1
+    if (stop_time is not None and (time.time() >= stop_time)):    # Check for time condition in seconds
+        set_shutdown("Maxtime exceeded")
+    
+    if(arg_pkts is not None and g_num_pkts >= arg_pkts):        # Check for number of packets
+        set_shutdown("%d packets written" % g_num_pkts)
     
     if(arg_mb is not None and (g_num_bytes >= arg_mb * 10**6)): # Check for number of bytes
-        g_shutdown = 1
+        set_shutdown("%d mbs exceeded" % g_num_bytes)
     
 def unpack_zmq(socket, outstream, ts_mode) -> int:
     """ 
@@ -266,11 +311,14 @@ def unpack_zmq(socket, outstream, ts_mode) -> int:
     return 0 # Success
 
 def main():
-    global g_header_written, g_magic, g_num_pkts, g_num_bytes, g_shutdown
+    global g_header_written, g_magic, g_num_pkts, g_num_bytes, g_shutdown, g_bw_count, g_enable_debug
     g_header_written = False      # Have we written the file header to the packet
     g_shutdown = 0
     g_num_pkts = 0
     g_num_bytes = 0
+    g_bw_count= 0
+    g_enable_debug = 0            # Set to 1 to enable debug prints to stderr
+    stop_time = None
     filter = ""                   # Blank string means we subscribe to all topics
     outstream = sys.stdout.buffer # Initialize output stream to stdout
 
@@ -278,18 +326,6 @@ def main():
         to print packets into wireshark/tshark/tcpdump.", add_help=False) # Initialize argument parser object
 
     args = get_args(parser) # Retrieve and parse arguments from the cl
-    print(args)
-    # If a PCAP file is provided for output stream, use it instead
-    if args.PCAP is not None:
-        outstream = open(args.PCAP, "wb") # Write to pcap as binary file
-
-    # Evaluate timestamp precision argument
-    if args.us is not None:
-        ts_mode = 1 # Use microseconds
-    elif args.ns is not None:
-        ts_mode = 2 # Use nanoseconds
-    else:
-        ts_mode = 0 # Use default
 
     socket = create_zmq_sub(args.ZMQ, filter) # Initialize ZMQ SUB
 
@@ -299,19 +335,40 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGQUIT, signal_handler)
 
+    # If a PCAP file is provided for output stream, use it instead
+    if args.PCAP is not None:
+        outstream = open(args.PCAP, "wb") # Write to pcap as binary file
+    
+    if args.maxtime is not None:
+        stop_time = time.time() + args.maxtime # What time do we disintegrate
+
+    if args.stats is not None:
+        signal.signal(signal.SIGALRM, alarm_handler)
+        signal.alarm(1)
+
+    # Evaluate timestamp precision argument
+    if args.us is not None:
+        ts_mode = 1 # Use microseconds
+    elif args.ns is not None:
+        ts_mode = 2 # Use nanoseconds
+    else:
+        ts_mode = 0 # Use default
+
     # Begin packet writing loop with a valid socket
     if socket != -1:
         err = 0
         while(err == 0 and not g_shutdown):
             err = unpack_zmq(socket, outstream, ts_mode) # Receive and unpack zmq messages as they come in 
-            check_for_stop_condition(args.maxtime, args.maxpkts, args.maxsize)
+            check_for_stop_condition(stop_time, args.maxpkts, args.maxsize)
     
     # Shutdown the ZMQ SUB bus
     zmq_sub_destroy(socket)
 
     # Close the PCAP file if opened
-    if not outstream.closed:
+    if args.PCAP is not None and not outstream.closed:
         outstream.close()
+
+    sys.stderr.write("Total Packets: %lu\nTotal Bytes  : %lu\n" %  (g_num_pkts, g_num_bytes + 16))
 
 if __name__ == "__main__":
     main()
