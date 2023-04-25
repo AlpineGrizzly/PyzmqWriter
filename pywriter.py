@@ -21,7 +21,7 @@ import time
 
 class pcap_hdr_t():
     """ Class struct to represent a pcap header """
-    def __init__(self, magic, vers_major, vers_minor, timezone, sigfigs, snaplen, linktype):
+    def __init__(self, magic, vers_major, vers_minor, timezone, sigfigs, snaplen, linktype) -> None:
         self.format = 'I2H4I'        # Little-endian format of bytes to be written
         self.magic = magic           # Time precision of pcap 
         self.vers_major = vers_major # Pcap Version Major
@@ -31,8 +31,13 @@ class pcap_hdr_t():
         self.snaplen = snaplen       # Snapshot length of capture
         self.linktype = linktype     # Network link
 
-    def write_pcap(self, outstream) -> int:
-        """ Write the pcap to an outstream """
+    def write_pcap_header(self, outstream) -> int:
+        """ 
+        write_pcap Write the pcap to an outstream 
+        :outstream: Outstream to write pcap to
+
+        return: Returns bytes written to outstream
+        """
         bytes_w = outstream.write(struct.pack(self.format, 
                                               self.magic, 
                                               self.vers_major, 
@@ -42,10 +47,41 @@ class pcap_hdr_t():
                                               self.snaplen, 
                                               self.linktype))
         return bytes_w
+
+class packet():
+    """ Class to represent a packet """
     
+    def __init__(self, format, sec, frac, cap_len, pkt_len, message) -> None:
+        self.format = format
+        self.sec = sec
+        self.frac = frac
+        self.cap_len = cap_len
+        self.pkt_len = pkt_len
+        self.message = message
+    
+    def write_packet(self, outstream) -> bool:
+        """
+        write_packet Write the packet to an outstream 
+        
+        :outstream: Outstream for packet to be written to
+
+        return: Returns bytes written to outstream
+        """
+        bytes_w = outstream.write(struct.pack(self.format, self.sec, self.frac, self.cap_len, self.pkt_len, self.message))
+
+        if(bytes_w == struct.calcsize(self.format)):
+            count_packet(bytes_w) # Count the bytes written
+            return True
+        
+        return False
+        
 def get_args(parser):
     """
-    Retrieves and parse arguments from the command line.
+    get_args Retrieves and parse arguments from the command line.
+
+    :parser: Parser object to store parsed arguments
+
+    return: Returns parser with parsed arguments
     """
     parser.add_argument('--help', '-h', action='help', help='Displays this information')
     parser.add_argument('--ZMQ', '-Z', action='store', metavar='<args>', required=True, type=str, help='Set the ZMQ bus to listen on') 
@@ -61,15 +97,22 @@ def get_args(parser):
 
 def handle_error(sub) -> None:
     """
-    Handle ZMQ SUB related errors
+    handler_error Handle ZMQ SUB related errors
+
+    :sub: ZMQ subscriber
     """
     sub.close()        # Close the subscriber
     sub.context.term() # Terminate context 
 	
 def create_zmq_sub(zmq_pub, filter) -> int:
     """
-    Creates ZMQ subscriber given an address and port to a zmq publisher
+    create_zmq_sub Creates ZMQ subscriber given an address and port to a zmq publisher
     e.g. protocol://interface:port
+
+    :zmq_pub: ZMQ publisher to connect subscriber to  
+    :filter: ZMQ topics to subscriber to
+
+    return: Returns socket connected to ZMQ publiser
     """
     context = zmq.Context()          # Initialize zmq context object
     socket = context.socket(zmq.SUB) # Assign context socket
@@ -81,19 +124,21 @@ def create_zmq_sub(zmq_pub, filter) -> int:
         print("Error in create_zmq_sub: %s\n" % exc)
         handle_error(socket)
         socket.context.term()
-        return -1;             # Unable to connect to publisher
-    
-    socket.setsockopt_string(zmq.SUBSCRIBE, filter) # Set topic filter
+        return -1;              # Unable to connect to publisher
 
-    # as_zmq_sub_attach -> Attaches the zmq sub to a thread - Do once working
+    socket.setsockopt_string(zmq.SUBSCRIBE, filter) # Set topic filter
 
     return socket
 
 def zmq_sub_destroy(sub) -> None:
+    """
+    zmq_sub_destroy Destroy the ZMQ subscriber
+    :sub: ZMQ subscriber to be destroyed
+    """
     sub.close()        # Close the subscriber
     sub.context.term() # Terminate context 
 
-def signal_handler(signum, frame):
+def signal_handler(signum, frame) -> None:
     """
     Handles signals thrown by system 
     :signum: Signal ID
@@ -112,7 +157,7 @@ def signal_handler(signum, frame):
         case signal.SIGQUIT:
             set_shutdown("SIGQUIT")
 
-def alarm_handler(signum, frame):
+def alarm_handler(signum, frame) -> None:
     """ 
     alarm handler Enabled when g_stats is defined, prints bytes/second of packet data written
     """
@@ -159,7 +204,6 @@ def write_header(fh, outstream, ts_mode) -> bool:
     tokens = fh.decode("utf-8").split('/') # Decode header binary + tokenize
     
     if len(tokens) != 5:
-        print("Error:: Insufficient header data\n") #DEBUG
         return False
 
     # Get our timestamp precision
@@ -181,11 +225,12 @@ def write_header(fh, outstream, ts_mode) -> bool:
     pcap_header = pcap_hdr_t(g_magic, 2, 4, timezone, sigfigs, snaplen, linktype)
 
     # Write header to outstream
-    bytes_w = pcap_header.write_pcap(outstream)
+    bytes_w = pcap_header.write_pcap_header(outstream)
 
     # Check to see if all bytes have been written to the outstream
     if(bytes_w == struct.calcsize(pcap_header.format)):
         return True # Success
+    
     return False
 
 def write_packet(ts_msg, pkt_msg, outstream) -> bool:
@@ -214,25 +259,14 @@ def write_packet(ts_msg, pkt_msg, outstream) -> bool:
     # Check for Microsecond precision
     if(g_magic == 0xA1B2C3D4): 
         frac /= 1000
+    
+    # byte format for packet header and messsage body    
+    byte_format = '4I%ss' % pkt_len # [int][int][int][int][message_size_nbytes] 
+    
+    # Set the packet header and message body
+    this_packet = packet(byte_format, sec, int(frac), cap_len, pkt_len, pkt_msg)
 
-    # Write the packet
-    byte_format = '4I' # Little-endian format of bytes to be written
-    bytes_w = outstream.write(struct.pack(byte_format, sec, int(frac), cap_len, pkt_len)) # Write packet header 
-    
-    # Check to see if all packet header have been written to the outstream
-    if(bytes_w != struct.calcsize(byte_format)):
-        return False
-    
-    # Write the packet payload
-    byte_format = '%ss'% pkt_len # Little-endian format of bytes to be written
-    bytes_w = outstream.write(struct.pack(byte_format, pkt_msg)) # Write packet header 
-    
-    # Check to see if all packet payload have been written to the outstream
-    if(bytes_w == struct.calcsize(byte_format)):
-        count_packet(bytes_w) # Count the processed packet
-        return True # Success
-    
-    return False
+    return this_packet.write_packet(outstream) # Return bool if we were able to write to stream
 
 def count_packet(pkt_bytes) -> None:
     """
@@ -242,7 +276,7 @@ def count_packet(pkt_bytes) -> None:
     """
     global g_num_pkts, g_num_bytes, g_bw_count
     g_num_pkts += 1
-    g_num_bytes += pkt_bytes + 16 # Add the packet header
+    g_num_bytes += pkt_bytes
     g_bw_count += pkt_bytes
 
 def set_shutdown(debug: str):
@@ -313,12 +347,12 @@ def unpack_zmq(socket, outstream, ts_mode) -> int:
 def main():
     global g_header_written, g_magic, g_num_pkts, g_num_bytes, g_shutdown, g_bw_count, g_enable_debug
     g_header_written = False      # Have we written the file header to the packet
-    g_shutdown = 0
-    g_num_pkts = 0
-    g_num_bytes = 0
-    g_bw_count= 0
+    g_shutdown = 0                # Shutdowns program if set to 1
+    g_num_pkts = 0                # Keeps track of number of packets written
+    g_num_bytes = 0               # Keeps track of number of bytes written
+    g_bw_count= 0                 # Counter used for --stats prints
     g_enable_debug = 0            # Set to 1 to enable debug prints to stderr
-    stop_time = None
+    stop_time = None              # Used to store a given time for stopping the program
     filter = ""                   # Blank string means we subscribe to all topics
     outstream = sys.stdout.buffer # Initialize output stream to stdout
 
@@ -368,7 +402,7 @@ def main():
     if args.PCAP is not None and not outstream.closed:
         outstream.close()
 
-    sys.stderr.write("Total Packets: %lu\nTotal Bytes  : %lu\n" %  (g_num_pkts, g_num_bytes + 16))
+    sys.stderr.write("Total Packets: %lu\nTotal Bytes  : %lu\n" %  (g_num_pkts, g_num_bytes))
 
 if __name__ == "__main__":
     main()
